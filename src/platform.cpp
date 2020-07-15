@@ -3,6 +3,8 @@
 #include "platform.hpp"
 #include "clc_compiler.h"
 
+#include <dxgi1_6.h>
+
 CL_API_ENTRY cl_int CL_API_CALL
 clGetPlatformInfo(cl_platform_id   platform,
     cl_platform_info param_name,
@@ -88,18 +90,64 @@ Platform::Platform(cl_icd_dispatch* dispatch)
     this->dispatch = dispatch;
 
     ComPtr<IDXCoreAdapterFactory> spFactory;
-    THROW_IF_FAILED(DXCoreCreateAdapterFactory(IID_PPV_ARGS(&spFactory)));
-
-    THROW_IF_FAILED(spFactory->CreateAdapterList(1, &DXCORE_ADAPTER_ATTRIBUTE_D3D12_CORE_COMPUTE, IID_PPV_ARGS(&m_spAdapters)));
-
-    m_Devices.resize(m_spAdapters->GetAdapterCount());
-    for (cl_uint i = 0; i < m_Devices.size(); ++i)
+    HRESULT res = DXCoreCreateAdapterFactory(IID_PPV_ARGS(&spFactory));
+    if (SUCCEEDED(res))
     {
-        ComPtr<IDXCoreAdapter> spAdapter;
-        THROW_IF_FAILED(m_spAdapters->GetAdapter(i, IID_PPV_ARGS(&spAdapter)));
-        m_Devices[i] = std::make_unique<Device>(*this, spAdapter.Get());
-    }
+        THROW_IF_FAILED(spFactory->CreateAdapterList(1, &DXCORE_ADAPTER_ATTRIBUTE_D3D12_CORE_COMPUTE, IID_PPV_ARGS(&m_spAdapters)));
 
+        m_Devices.resize(m_spAdapters->GetAdapterCount());
+        for (cl_uint i = 0; i < m_Devices.size(); ++i)
+        {
+            ComPtr<IDXCoreAdapter> spAdapter;
+            THROW_IF_FAILED(m_spAdapters->GetAdapter(i, IID_PPV_ARGS(&spAdapter)));
+            m_Devices[i] = std::make_unique<Device>(*this, spAdapter.Get());
+        }
+    }
+    else
+    {
+		ComPtr<IDXGIFactory4> currentFactory;
+        DWORD dxgiFactoryFlags = DXGI_CREATE_FACTORY_DEBUG;
+		HRESULT hr = CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(currentFactory.GetAddressOf()));
+        THROW_IF_FAILED(hr);
+
+		ComPtr<IDXGIFactory6> factory6;
+		hr = currentFactory.As(&factory6);
+        THROW_IF_FAILED(hr);
+
+		ComPtr<IDXGIAdapter1> adapter;
+        for (UINT adapterIndex = 0;
+            SUCCEEDED(
+                factory6->EnumAdapterByGpuPreference(
+                    adapterIndex,
+                    DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+                    IID_PPV_ARGS(adapter.ReleaseAndGetAddressOf()))
+            );
+            adapterIndex++)
+        {
+
+			if (!SUCCEEDED(hr))
+			{
+				continue;
+			}
+            
+            DXGI_ADAPTER_DESC1 desc;
+            hr = adapter->GetDesc1(&desc);
+			if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
+			{
+				continue;
+			}
+
+			ComPtr<ID3D12Device> dxDevice;
+			hr = D3D12CreateDevice(
+				adapter.Get(),
+				D3D_FEATURE_LEVEL_12_0, //[TODO]
+				IID_PPV_ARGS(dxDevice.ReleaseAndGetAddressOf())
+            );
+            THROW_IF_FAILED(hr);
+            // m_Devices[adapterIndex] = std::make_unique<Device>(*this, adapter.Get());
+            m_Devices.push_back(std::make_unique<Device>(*this, adapter.Get()));
+        }
+    }
     // TODO: Find some runtime way to enable this logic to force WARP
     //(void)std::remove_if(m_Devices.begin(), m_Devices.end(), [](std::unique_ptr<Device> const& a)
     //{

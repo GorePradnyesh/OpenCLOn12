@@ -6,6 +6,8 @@
 #include <optional>
 #include <mutex>
 
+#include <dxgi.h>
+
 using ImmCtx = D3D12TranslationLayer::ImmediateContext;
 
 class Task;
@@ -16,6 +18,7 @@ class Device : public CLChildBase<Device, Platform, cl_device_id>
 {
 public:
     Device(Platform& parent, IDXCoreAdapter* pAdapter);
+    Device(Platform& parent, IDXGIAdapter1* pDXGIAdapter);
     ~Device();
 
     cl_bool IsAvailable() const noexcept;
@@ -42,9 +45,12 @@ public:
 protected:
     void ExecuteTasks(Submission& tasks);
 
-    ComPtr<IDXCoreAdapter> m_spAdapter;
+    ComPtr<IDXCoreAdapter> m_spAdapter;    
     ComPtr<ID3D12Device> m_spDevice;
     DXCoreHardwareID m_HWIDs;
+
+    ComPtr<IDXGIAdapter1> m_dxgiAdapter;
+    DXGI_ADAPTER_DESC1 m_dxgiDesc;
 
     // Lazy-initialized
     std::mutex m_InitLock;

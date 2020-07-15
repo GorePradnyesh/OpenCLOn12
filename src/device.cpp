@@ -226,6 +226,14 @@ Device::Device(Platform& parent, IDXCoreAdapter* pAdapter)
     pAdapter->GetProperty(DXCoreAdapterProperty::HardwareID, sizeof(m_HWIDs), &m_HWIDs);
 }
 
+Device::Device(Platform& parent, IDXGIAdapter1* pDXGIAdapter)
+	: CLChildBase(parent)
+	, m_dxgiAdapter(pDXGIAdapter)
+{
+    m_dxgiAdapter->GetDesc1(&m_dxgiDesc);
+    m_HWIDs = { m_dxgiDesc.VendorId, m_dxgiDesc.DeviceId, m_dxgiDesc.SubSysId, m_dxgiDesc.Revision};
+}
+
 Device::~Device() = default;
 
 void Device::InitD3D()
@@ -278,20 +286,36 @@ void Device::ReleaseD3D()
 cl_bool Device::IsAvailable() const noexcept
 {
     bool driverUpdateInProgress = true;
-    return SUCCEEDED(m_spAdapter->QueryState(DXCoreAdapterState::IsDriverUpdateInProgress,
-        0, nullptr, sizeof(driverUpdateInProgress), &driverUpdateInProgress))
-        && !driverUpdateInProgress;
+    if (m_spAdapter)
+    {
+        return SUCCEEDED(m_spAdapter->QueryState(DXCoreAdapterState::IsDriverUpdateInProgress,
+            0, nullptr, sizeof(driverUpdateInProgress), &driverUpdateInProgress))
+            && !driverUpdateInProgress;
+    }
+    else
+    {
+        return true;    // TODO: add check for driver update in progress, if supported
+    }
 }
 
 cl_ulong Device::GetGlobalMemSize() const noexcept
 {
-    size_t localMemory = 0;
-    m_spAdapter->GetProperty(DXCoreAdapterProperty::DedicatedAdapterMemory, sizeof(localMemory), &localMemory);
-    size_t nonlocalMemory = 0;
-    m_spAdapter->GetProperty(DXCoreAdapterProperty::DedicatedSystemMemory, sizeof(nonlocalMemory), &nonlocalMemory);
-    size_t sharedMemory = 0;
-    m_spAdapter->GetProperty(DXCoreAdapterProperty::SharedSystemMemory, sizeof(sharedMemory), &sharedMemory);
-    return ((cl_ulong)localMemory + nonlocalMemory + sharedMemory);
+    if (m_spAdapter)
+    {
+        size_t localMemory = 0;
+        m_spAdapter->GetProperty(DXCoreAdapterProperty::DedicatedAdapterMemory, sizeof(localMemory), &localMemory);
+        size_t nonlocalMemory = 0;
+        m_spAdapter->GetProperty(DXCoreAdapterProperty::DedicatedSystemMemory, sizeof(nonlocalMemory), &nonlocalMemory);
+        size_t sharedMemory = 0;
+        m_spAdapter->GetProperty(DXCoreAdapterProperty::SharedSystemMemory, sizeof(sharedMemory), &sharedMemory);
+        return ((cl_ulong)localMemory + nonlocalMemory + sharedMemory);
+    }
+    else if(m_dxgiAdapter)
+    {
+        return ((cl_ulong)m_dxgiDesc.DedicatedVideoMemory + m_dxgiDesc.DedicatedSystemMemory + m_dxgiDesc.SharedSystemMemory);
+    }
+    THROW_IF_FAILED(E_FAIL);
+    return 0;
 }
 
 DXCoreHardwareID const& Device::GetHardwareIds() const noexcept
@@ -301,7 +325,14 @@ DXCoreHardwareID const& Device::GetHardwareIds() const noexcept
 
 bool Device::IsMCDM() const noexcept
 {
-    return !m_spAdapter->IsAttributeSupported(DXCORE_ADAPTER_ATTRIBUTE_D3D12_GRAPHICS);
+	if (m_spAdapter)
+	{
+		return !m_spAdapter->IsAttributeSupported(DXCORE_ADAPTER_ATTRIBUTE_D3D12_GRAPHICS);
+	}
+	else
+	{
+		return false;
+	}
 }
 
 bool Device::IsUMA() const noexcept
@@ -326,10 +357,20 @@ std::string Device::GetDeviceName() const
 {
     std::string name;
     size_t nameSize = 0;
-    if (SUCCEEDED(m_spAdapter->GetPropertySize(DXCoreAdapterProperty::DriverDescription, &nameSize)))
+    if (m_spAdapter)
     {
-        name.resize(nameSize);
-        m_spAdapter->GetProperty(DXCoreAdapterProperty::DriverDescription, nameSize, name.data());
+        if (SUCCEEDED(m_spAdapter->GetPropertySize(DXCoreAdapterProperty::DriverDescription, &nameSize)))
+        {
+            name.resize(nameSize);
+            m_spAdapter->GetProperty(DXCoreAdapterProperty::DriverDescription, nameSize, name.data());
+        }
+    }
+    else if (m_dxgiAdapter)
+    {
+        std::wstring w_description(m_dxgiDesc.Description);
+        name = std::string("NVIDIA Device");
+        // TODO: Add conversion for description to std::string
+        // name = std::string(w_description.begin(), w_description.end());
     }
     return name;
 }
